@@ -1,0 +1,18 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored because
+# it holds credentials. Per-account region lives in providers.tf; per-account
+# roles/labels live in main.tf (local.accounts). See TESTING.md.
+
+# --- Teleport provider auth ---
+# Teleport proxy address (required, no default).
+teleport_addr = "yourtenant.teleport.sh:443"
+
+# Path to the tbot/MachineID identity file used to auth the Teleport provider.
+# Default is "identity" (a file named `identity` in this dir). Change if needed.
+teleport_identity_file = "identity"
+
+# --- AWS account credentials (one IAM user per account; sensitive) ---
+# Each aliased provider in providers.tf authenticates directly with these keys.
+provider_1_access_key = "AKIA...111"
+provider_1_secret_key = "..."
+provider_2_access_key = "AKIA...222"
+provider_2_secret_key = "..."

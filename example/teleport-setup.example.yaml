@@ -1,0 +1,44 @@
+# Teleport-side resources you create out-of-band (with `tctl create -f`), NOT
+# managed by this Terraform. Replace <ACCOUNT_ID> / role names to match your
+# main.tf (name_prefix + target_roles keys). See TESTING.md.
+#
+# 1) A non-interactive user for the Terraform provider, bound to the built-in
+#    `terraform-provider` role (Teleport >= 16.2). Sign its identity file with:
+#       tctl auth sign --user=terraform --out=identity --format=file --ttl=10h
+---
+kind: user
+version: v2
+metadata:
+  name: terraform
+spec:
+  roles: ["terraform-provider"]
+---
+# 2) Lets your admin user impersonate `terraform` so it can sign the identity
+#    above. Attach to your user, then re-login to pick it up.
+kind: role
+version: v7
+metadata:
+  name: terraform-impersonator
+spec:
+  allow:
+    impersonate:
+      users: ["terraform"]
+      roles: ["terraform-provider"]
+---
+# 3) Example access role: grants assume of ONE target role, scoped to the
+#    matching synced app. Teleport imports each Roles Anywhere profile's AWS
+#    tags as app labels prefixed with `aws/`, so the `access-level` tag set by
+#    the aws-account module becomes `aws/access-level`. Combine with
+#    `teleport.dev/account-id` so same-named roles in different accounts don't
+#    overlap. Duplicate this block per role/account.
+kind: role
+version: v7
+metadata:
+  name: aws-ra-readonly
+spec:
+  allow:
+    app_labels:
+      "aws/access-level": "readonly"
+      "teleport.dev/account-id": "<ACCOUNT_ID>"
+    aws_role_arns:
+      - "arn:aws:iam::<ACCOUNT_ID>:role/teleport-readonly"
