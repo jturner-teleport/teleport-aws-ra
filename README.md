@@ -34,7 +34,14 @@ aws-account (...)     ─┘  role_arn                (for_each → N integratio
    This is the only out-of-band step — the Teleport provider has no
    CA-export data source.
 2. A Teleport identity file for the provider (tbot / MachineID).
-3. AWS credentials that can assume an admin role in each target account.
+3. AWS credentials for each target account. `example/providers.tf` ships with
+   two auth styles — pick one per account:
+   - **Option A — static keys (the shipped default):** a dedicated IAM user per
+     account, keys passed via the sensitive `provider_*_access_key` /
+     `provider_*_secret_key` variables in `terraform.tfvars`.
+   - **Option B — assume-role:** base credentials in your shell that can
+     `sts:AssumeRole` into an admin role in each account. Uncomment the
+     assume-role blocks (and comment out Option A) to use this.
 
 ## Usage walkthrough
 
@@ -44,26 +51,44 @@ aws-account (...)     ─┘  role_arn                (for_each → N integratio
    ```
    tctl auth export --type awsra > example/teleport-awsra-ca.pem
    ```
-2. Get a Teleport identity for the provider (tbot / MachineID), e.g.:
+2. Get a Teleport identity for the provider. Create the `terraform` user +
+   impersonation role (see `example/teleport-setup.example.yaml`), then sign an
+   identity file for it:
    ```
-   tsh login --proxy=example.teleport.sh:443
-   tctl bots add terraform --roles=terraform-provider --format=json   # produces the identity file
+   tctl auth sign --user=terraform --out=example/identity --format=file --ttl=10h
    ```
-3. Have AWS credentials in your shell that can `sts:AssumeRole` into a
-   `TerraformAdmin` role in each target account.
+   (`tbot`/MachineID is the longer-lived alternative.)
+3. Set up AWS credentials per the auth style you picked (see Prerequisites #3):
+   - **Option A (static keys, default):**
+     `cp example/terraform.tfvars.example example/terraform.tfvars` and fill in a
+     per-account IAM user's access/secret keys.
+   - **Option B (assume-role):** have base credentials in your shell that can
+     `sts:AssumeRole` into a `TerraformAdmin` role in each target account, and
+     switch `providers.tf` to the assume-role blocks.
 
 ### Step 1 — declare each account (two places)
 
 Terraform can't loop over providers, so an account lives in two spots. To add
 account `dev` (`333333333333`):
 
-`example/providers.tf` — one aliased provider:
+`example/providers.tf` — one aliased provider. Match the auth style the file
+already uses (static keys ship active by default; assume-role is the commented
+alternative):
 ```hcl
+# Option A — static keys (the shipped default): add a provider_3_* var pair too.
 provider "aws" {
-  alias  = "dev"
-  region = "us-east-1"
-  assume_role { role_arn = "arn:aws:iam::333333333333:role/TerraformAdmin" }
+  alias      = "dev"
+  region     = "us-east-1"
+  access_key = var.provider_3_access_key
+  secret_key = var.provider_3_secret_key
 }
+
+# Option B — assume-role (if you switched providers.tf to this style):
+# provider "aws" {
+#   alias  = "dev"
+#   region = "us-east-1"
+#   assume_role { role_arn = "arn:aws:iam::333333333333:role/TerraformAdmin" }
+# }
 ```
 
 `example/main.tf` — one AWS module call (the IAM roles users get in that account):
@@ -112,6 +137,7 @@ anchor/profile before the integration that points at it — no manual ordering.
 
 ```
 cd example
+cp terraform.tfvars.example terraform.tfvars   # then fill in teleport_addr + creds
 tofu init
 tofu plan      # expect N aws-account modules + N integrations
 tofu apply     # both sides, in the right order, in one run
@@ -128,16 +154,22 @@ tctl get apps
 
 ### Step 5 — grant users access (outside this module)
 
-The module creates the roles + integration, not the RBAC. In a Teleport role:
+The module creates the roles + integration, not the RBAC. Teleport imports each
+Roles Anywhere profile's AWS tags as app labels prefixed with `aws/`, so the
+`access-level` tag the `aws-account` module stamps on every target profile shows
+up as `aws/access-level` — a stable label to scope on. In a Teleport role:
 ```yaml
 spec:
   allow:
     app_labels:
-      'teleport.dev/aws-roles-anywhere-profile-arn': '*'   # or scope by env label
+      'aws/access-level': 'readonly'              # the target_roles key
+      'teleport.dev/account-id': '333333333333'   # so same-named roles across accounts don't overlap
     aws_role_arns:
       - 'arn:aws:iam::333333333333:role/teleport-readonly'  # from the target_role_arns output
 ```
 Then: `tsh apps login <app> --aws-role readonly`.
+(`teleport.dev/aws-roles-anywhere-profile-arn` is also available if you'd rather
+scope on the generated profile ARN. See `example/teleport-setup.example.yaml`.)
 
 ### What goes where
 
@@ -157,15 +189,16 @@ Then: `tsh apps login <app> --aws-role readonly`.
 
 ## Granting access
 
-Profiles sync in as apps labelled with
-`teleport.dev/aws-roles-anywhere-profile-arn`. Grant access in a Teleport role
-via `app_labels` plus `aws_role_arns` listing the target role ARNs (see the
-`target_role_arns` output).
+Profiles sync in as apps. The module stamps an `access-level` tag on each target
+profile, which Teleport imports as the `aws/access-level` app label; scope on
+that (plus `teleport.dev/account-id`) in a Teleport role, alongside `aws_role_arns`
+listing the target role ARNs (see the `target_role_arns` output). The generated
+`teleport.dev/aws-roles-anywhere-profile-arn` label is also available.
 
 ## Notes / verify before applying
 
 - Validated with `tofu validate` (OpenTofu 1.12.2); provider versions resolved
-  and pinned in the `.terraform.lock.hcl` files: Teleport `18.8.3`, AWS `6.50.0`.
+  and pinned in the `.terraform.lock.hcl` files: Teleport `18.9.0`, AWS `6.51.0`.
   The `>= 5.0` constraint allowed AWS 6.x — tighten to `~> 5.0` if you need 5.x.
 - The profile-sync IAM policy is a reasonable starting set
   (`rolesanywhere:ListProfiles/GetProfile/ListTagsForResource`, `iam:GetRole/ListRoles`);
