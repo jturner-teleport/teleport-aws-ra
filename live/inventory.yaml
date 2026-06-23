@@ -1,0 +1,45 @@
+# Source of truth for which accounts/regions get Roles Anywhere + a Teleport
+# integration. Edit this, then run:  python3 live/scripts/generate-stacks.py
+# That regenerates live/<env>/terragrunt.stack.hcl (one unit per account/region).
+#
+# create_roles controls whether the target IAM roles are CREATED here (test
+# accounts that don't have them yet) or REFERENCED as existing roles (which must
+# already trust Roles Anywhere — see docs/reusing-existing-iam-roles.md).
+# Resolution: account → environment → defaults. Same for `regions` and `roles`.
+
+defaults:
+  regions: [us-east-1, us-west-2]
+  create_roles: false # default: reference existing roles
+  roles: # access_level => IAM role name + (for creation) managed policies
+    readonly:
+      name: ReadOnly
+      managed_policy_arns: ["arn:aws:iam::aws:policy/ReadOnlyAccess"]
+    poweruser:
+      name: PowerUser
+      managed_policy_arns: ["arn:aws:iam::aws:policy/PowerUserAccess"]
+    admin:
+      name: Admin
+      managed_policy_arns: ["arn:aws:iam::aws:policy/AdministratorAccess"]
+
+environments:
+  test:
+    create_roles: true # test accounts don't have the roles yet → create them
+    accounts:
+      # Auth via static keys in a named profile (live/.aws-credentials), since
+      # these test accounts use a direct `terraform` IAM user (no tec-deployer).
+      - name: test-1
+        account_id: "111111111111"
+        aws_profile: teleport-test-1
+      - name: test-2
+        account_id: "222222222222"
+        aws_profile: teleport-test-2
+
+  prod:
+    # create_roles inherits the default (false) → reference existing roles.
+    # Auth via assume-role into the per-account deployer role.
+    accounts:
+      - name: prod-1
+        account_id: "333333333333"
+        deployer_role_arn: "arn:aws:iam::333333333333:role/tec-deployer"
+        # Per-account override: this one also has an EU region.
+        regions: [us-east-1, us-west-2, eu-west-1]
