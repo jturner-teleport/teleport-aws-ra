@@ -1,207 +1,246 @@
-# Teleport AWS Roles Anywhere — multi-account Terraform
+# Teleport AWS Roles Anywhere — Terraform / Terragrunt
 
-Provisions, per AWS account, the AWS IAM Roles Anywhere resources and the
-matching Teleport `aws-ra` integration. With profile sync enabled, Teleport
-auto-creates an AWS app per Roles Anywhere profile — you don't author apps.
+Give Teleport users access to AWS accounts via **AWS IAM Roles Anywhere (RA)**.
+For each AWS account/region this provisions the RA resources (trust anchor, sync
+profile, target profiles) and a matching Teleport `aws-ra` integration. With
+profile sync enabled, **Teleport auto-creates one AWS app per RA profile** (~every
+5 min) — you don't author apps by hand.
 
-## Layout
+It supports both:
+- **Creating** the access roles (handy for fresh/test accounts), or
+- **Referencing** roles your accounts already have (e.g. the roles used for Okta
+  SAML) — see [docs/reusing-existing-iam-roles.md](docs/reusing-existing-iam-roles.md).
 
-- `modules/aws-account/` — AWS-side resources for **one** account: trust anchor,
-  profile-sync role + profile, and target IAM roles. Called once per account
-  because Terraform can't `for_each` over provider configurations.
-- `modules/teleport-integrations/` — Teleport-side, **one** provider,
-  `for_each` over a map of accounts → one `teleport_integration` each.
-- `example/` — wires both together for two accounts (`prod`, `staging`).
+---
 
-## How it fits together
+## Which path should I use?
+
+| Path | Use when | Lives in |
+|---|---|---|
+| **A. Quick demo** | A few accounts, one `apply`, kick the tires | [`example/`](example/) |
+| **B. Scale (Terragrunt Stacks)** | Many accounts × regions, driven by an inventory | [`live/`](live/) |
+
+Both use the same building-block modules. **Path B is the one to use for real
+multi-account rollouts** — start there unless you just want a quick demo.
+
+---
+
+## Repository layout
 
 ```
-aws-account (prod)    ─┐  trust_anchor_arn
-aws-account (staging) ─┤  profile_arn        ──►  teleport-integrations
-aws-account (...)     ─┘  role_arn                (for_each → N integrations)
-                                                          │
-                                          Teleport profile sync (~5 min)
-                                                          ▼
-                                          one AWS app per RA profile
+modules/
+  aws-ra/                 AWS RA resources for ONE account/region (create OR reference roles)
+  teleport-integrations/  ONE Teleport provider → one teleport_integration per account
+  ara-region/             Thin composite: aws-ra + teleport-integrations (what each unit runs)
+  teleport-access-roles/  Cluster-global Teleport roles (one per access tier)
+  aws-account/            Legacy: creates roles, single-region trust (used by example/ demo)
+units/
+  ara-region/             Terragrunt unit template (generates the AWS provider, reads values)
+live/
+  inventory.yaml          Source of truth: accounts, regions, roles per environment
+  scripts/generate-stacks.py   Generates the stack files from the inventory
+  root.hcl                Shared: remote state + Teleport provider (included by every unit)
+  <env>/terragrunt.stack.hcl   Generated unit blocks (one per account/region) — committed
+  teleport/access-roles/  Cluster-global Teleport access-roles unit
+example/                  Quick-demo root wiring two accounts in a single apply
+docs/                     Longer-form docs (e.g. reusing existing IAM roles)
 ```
 
-## Prerequisites
+---
 
-1. Export the Teleport CA bundle once and drop it next to the example:
+## Path B — Many accounts at scale (Terragrunt Stacks)
+
+### How it works
+
+```
+inventory.yaml ──▶ scripts/generate-stacks.py ──▶ live/<env>/terragrunt.stack.hcl
+                                                         │  terragrunt stack generate
+                                                         ▼
+                                  .terragrunt-stack/<account>/<region>/  (one unit/state each)
+                                                         │  units/ara-region → modules/ara-region
+                                                         ▼
+                              AWS RA resources + Teleport integration, per account/region
+```
+
+You edit **one YAML file** and re-run the generator; adding accounts never means
+hand-writing config. (Terragrunt units don't support `for_each` yet, so a small
+generator emits the explicit `unit` blocks — the generated stack files are
+committed so the diff is reviewable.)
+
+### Prerequisites
+
+1. **Tools:** `terragrunt` (≥ v0.78 for Stacks), `terraform`/`tofu`, `python3` + `pyyaml`.
+2. **Teleport CA bundle** at the repo root:
+   ```sh
+   tctl auth export --type awsra > teleport-awsra-ca.pem
    ```
-   tctl auth export --type awsra > example/teleport-awsra-ca.pem
+3. **Teleport provider identity** at the repo root (its role must be able to manage
+   `integration` and `role` resources — see `example/teleport-setup.example.yaml`):
+   ```sh
+   tctl auth sign --user=terraform --out=identity --format=file --ttl=10h
    ```
-   This is the only out-of-band step — the Teleport provider has no
-   CA-export data source.
-2. A Teleport identity file for the provider (tbot / MachineID).
-3. AWS credentials for each target account. `example/providers.tf` ships with
-   two auth styles — pick one per account:
-   - **Option A — static keys (the shipped default):** a dedicated IAM user per
-     account, keys passed via the sensitive `provider_*_access_key` /
-     `provider_*_secret_key` variables in `terraform.tfvars`.
-   - **Option B — assume-role:** base credentials in your shell that can
-     `sts:AssumeRole` into an admin role in each account. Uncomment the
-     assume-role blocks (and comment out Option A) to use this.
+4. **AWS auth per account** — chosen in `inventory.yaml` (see Step 1).
 
-## Usage walkthrough
+> `identity`, `*.pem`, `live/.aws-credentials`, state files, and `.terragrunt-stack/`
+> are all gitignored.
 
-### Step 0 — one-time prep (independent of account count)
+### Step 1 — set environment + credentials
 
-1. Export the Teleport CA bundle (one cert, reused by every account's trust anchor):
-   ```
-   tctl auth export --type awsra > example/teleport-awsra-ca.pem
-   ```
-2. Get a Teleport identity for the provider. Create the `terraform` user +
-   impersonation role (see `example/teleport-setup.example.yaml`), then sign an
-   identity file for it:
-   ```
-   tctl auth sign --user=terraform --out=example/identity --format=file --ttl=10h
-   ```
-   (`tbot`/MachineID is the longer-lived alternative.)
-3. Set up AWS credentials per the auth style you picked (see Prerequisites #3):
-   - **Option A (static keys, default):**
-     `cp example/terraform.tfvars.example example/terraform.tfvars` and fill in a
-     per-account IAM user's access/secret keys.
-   - **Option B (assume-role):** have base credentials in your shell that can
-     `sts:AssumeRole` into a `TerraformAdmin` role in each target account, and
-     switch `providers.tf` to the assume-role blocks.
+```sh
+export TELEPORT_ADDR="yourtenant.teleport.sh:443"
 
-### Step 1 — declare each account (two places)
-
-Terraform can't loop over providers, so an account lives in two spots. To add
-account `dev` (`333333333333`):
-
-`example/providers.tf` — one aliased provider. Match the auth style the file
-already uses (static keys ship active by default; assume-role is the commented
-alternative):
-```hcl
-# Option A — static keys (the shipped default): add a provider_3_* var pair too.
-provider "aws" {
-  alias      = "dev"
-  region     = "us-east-1"
-  access_key = var.provider_3_access_key
-  secret_key = var.provider_3_secret_key
-}
-
-# Option B — assume-role (if you switched providers.tf to this style):
-# provider "aws" {
-#   alias  = "dev"
-#   region = "us-east-1"
-#   assume_role { role_arn = "arn:aws:iam::333333333333:role/TerraformAdmin" }
-# }
+# State backend: set these for S3 state, OR leave TG_STATE_BUCKET unset to use
+# local state files (fine for a first run).
+export TG_STATE_BUCKET="my-tfstate"  TG_STATE_REGION="us-east-1"  TG_STATE_LOCK_TABLE="tf-locks"
 ```
 
-`example/main.tf` — one AWS module call (the IAM roles users get in that account):
-```hcl
-module "aws_dev" {
-  source          = "../modules/aws-account"
-  providers       = { aws = aws.dev }       # binds this call to the dev account
-  name_prefix     = "teleport"
-  teleport_ca_pem = local.teleport_ca_pem
-  target_roles = {
-    readonly = { managed_policy_arns = ["arn:aws:iam::aws:policy/ReadOnlyAccess"] }
-  }
-}
+Each account picks one AWS auth mode in `inventory.yaml`:
+
+- **Static keys (named profile):** put the keys in a gitignored `live/.aws-credentials`
+  and point at it:
+  ```sh
+  export AWS_SHARED_CREDENTIALS_FILE="$(pwd)/live/.aws-credentials"
+  ```
+  ```ini
+  # live/.aws-credentials
+  [teleport-acct1]
+  aws_access_key_id = AKIA...
+  aws_secret_access_key = ...
+  ```
+- **Assume-role:** have base credentials in your shell that can `sts:AssumeRole`
+  into each account's deployer role.
+
+### Step 2 — edit the inventory
+
+`live/inventory.yaml` is the single source of truth:
+
+```yaml
+defaults:
+  regions: [us-east-1, us-west-2]
+  create_roles: false          # false = reference existing roles; true = create them
+  roles:                       # access_level => IAM role name (+ policies for creation)
+    readonly:  { name: ReadOnly,  managed_policy_arns: ["arn:aws:iam::aws:policy/ReadOnlyAccess"] }
+    poweruser: { name: PowerUser, managed_policy_arns: ["arn:aws:iam::aws:policy/PowerUserAccess"] }
+    admin:     { name: Admin,     managed_policy_arns: ["arn:aws:iam::aws:policy/AdministratorAccess"] }
+
+environments:
+  test:
+    create_roles: true         # test accounts don't have the roles yet → create them
+    accounts:
+      - { name: acct1, account_id: "111111111111", aws_profile: teleport-acct1 }     # static keys
+  prod:
+    accounts:
+      - { name: prod1, account_id: "222222222222",
+          deployer_role_arn: "arn:aws:iam::222222222222:role/tec-deployer",          # assume-role
+          regions: [us-east-1, us-west-2, eu-west-1] }                                # per-account override
 ```
 
-### Step 2 — the data flow (no ARNs copied by hand)
+- `create_roles`, `regions`, `roles` resolve **account → environment → defaults**.
+- `aws_profile` (static keys) **or** `deployer_role_arn` (assume-role) per account.
 
-`aws-account` emits an `integration_input` object shaped for the Teleport module:
-```
-module.aws_dev.integration_input = {
-  trust_anchor_arn = "arn:aws:rolesanywhere:...:trust-anchor/abc"
-  profile_arn      = "arn:aws:rolesanywhere:...:profile/def"
-  role_arn         = "arn:aws:iam::333...:role/teleport-profile-sync"
-}
-```
+### Step 3 — generate the stack files
 
-`merge()` it with your Teleport-side preferences into the `accounts` map:
-```hcl
-module "teleport_integrations" {
-  source = "../modules/teleport-integrations"
-  accounts = {
-    dev = merge(module.aws_dev.integration_input, {
-      profile_name_filters = ["teleport-*"]   # only sync RA profiles named teleport-*
-      labels               = { env = "dev" }
-    })
-  }
-}
+```sh
+python3 live/scripts/generate-stacks.py     # writes live/<env>/terragrunt.stack.hcl
+git add live/inventory.yaml live/*/terragrunt.stack.hcl   # commit both
 ```
 
-The map key (`dev`) becomes the integration name `aws-ra-dev`, and `for_each`
-turns N entries into N integrations. Referencing `module.aws_dev.integration_input`
-also creates the dependency edge, so Terraform always builds the AWS trust
-anchor/profile before the integration that points at it — no manual ordering.
+### Step 4 — apply AWS + integrations for an environment
 
-### Step 3 — apply
-
-```
-cd example
-cp terraform.tfvars.example terraform.tfvars   # then fill in teleport_addr + creds
-tofu init
-tofu plan      # expect N aws-account modules + N integrations
-tofu apply     # both sides, in the right order, in one run
+```sh
+cd live/test
+terragrunt stack generate          # materialize .terragrunt-stack/ (one unit per account/region)
+terragrunt run --all plan          # review
+terragrunt run --all apply         # creates RA resources + the Teleport integration per unit
 ```
 
-### Step 4 — apps appear automatically
-
-With `sync_enabled = true`, Teleport polls each account's Roles Anywhere
-profiles ~every 5 min and creates one AWS app per matching profile:
-```
+Within ~5 min, Teleport syncs the profiles and the apps appear:
+```sh
 tsh apps ls
 tctl get apps
 ```
 
-### Step 5 — grant users access (outside this module)
+### Step 5 — apply the cluster-global Teleport access roles (once)
 
-The module creates the roles + integration, not the RBAC. Teleport imports each
-Roles Anywhere profile's AWS tags as app labels prefixed with `aws/`, so the
-`access-level` tag the `aws-account` module stamps on every target profile shows
-up as `aws/access-level` — a stable label to scope on. In a Teleport role:
+These are the RBAC roles that actually let users in — one per tier, applied once
+for the whole cluster (not per account). They read the tiers from the inventory:
+
+```sh
+cd live/teleport/access-roles
+terragrunt apply
+```
+
+By default each role uses a **wildcard** `aws_role_arns` (`arn:aws:iam::*:role/ReadOnly`)
+so one role grants that tier across every account (relies on consistent role
+names). Set `account_ids` in that unit to pin to specific accounts instead.
+
+### Adding accounts later
+
+Edit `inventory.yaml` → `python3 live/scripts/generate-stacks.py` → commit →
+`terragrunt run --all apply`. The unit template and modules don't change.
+
+---
+
+## Path A — Quick demo (`example/`)
+
+A single root that wires two accounts in one `apply` using the legacy
+`aws-account` module (which **creates** roles and pins trust to one region).
+
+```sh
+cd example
+cp terraform.tfvars.example terraform.tfvars        # fill in teleport_addr + AWS creds
+# put teleport-awsra-ca.pem + identity in example/
+tofu init && tofu plan && tofu apply
+```
+
+`example/providers.tf` ships with static-key auth active and an assume-role
+alternative commented out. See the comments in `example/*.tf` and
+`example/TESTING.md`.
+
+---
+
+## Creating vs. reusing IAM roles
+
+- **Create** (`create_roles: true`): the `aws-ra` module makes each role with the
+  RA trust policy baked in — usable immediately, no extra steps.
+- **Reference** (`create_roles: false`): the module points RA profiles at
+  `arn:aws:iam::<account>:role/<name>`. Those roles **must already trust Roles
+  Anywhere** — add one trust statement per role (it coexists with Okta/SAML).
+  Full instructions: [docs/reusing-existing-iam-roles.md](docs/reusing-existing-iam-roles.md).
+
+Either way the RA trust uses `aws:SourceAccount`, so one statement covers every
+region in the account.
+
+## Granting users access
+
+Teleport imports each RA profile's AWS tags as app labels prefixed with `aws/`.
+The modules stamp an `access-level` tag on every target profile, so apps get an
+`aws/access-level` label to scope on. The `teleport-access-roles` module builds
+roles like:
+
 ```yaml
 spec:
   allow:
     app_labels:
-      'aws/access-level': 'readonly'              # the target_roles key
-      'teleport.dev/account-id': '333333333333'   # so same-named roles across accounts don't overlap
+      'aws/access-level': 'readonly'
     aws_role_arns:
-      - 'arn:aws:iam::333333333333:role/teleport-readonly'  # from the target_role_arns output
+      - 'arn:aws:iam::*:role/ReadOnly'    # wildcard across accounts (or pin via account_ids)
 ```
-Then: `tsh apps login <app> --aws-role readonly`.
-(`teleport.dev/aws-roles-anywhere-profile-arn` is also available if you'd rather
-scope on the generated profile ARN. See `example/teleport-setup.example.yaml`.)
 
-### What goes where
+Then: `tsh apps login <app> --aws-role ReadOnly`.
 
-| You decide | Where it lives |
-|---|---|
-| Which accounts exist + how to auth into each | `providers.tf` (aliased provider per account) |
-| What IAM roles users get per account | `aws-account` module call → `target_roles` |
-| Which profiles sync + integration labels/filters | `accounts` map in the Teleport module |
-| ARNs connecting AWS ↔ Teleport | automatic via `integration_input` |
-| Who can use the apps | Teleport roles (outside this module) |
+---
 
-## Adding an account
+## Status & known issues
 
-1. Add an aliased `provider "aws"` block in `example/providers.tf`.
-2. Add a `module "aws_<name>"` call in `example/main.tf` with that provider.
-3. Add an entry to the `accounts` map passed to `teleport_integrations`.
+- **Modules:** all pass `terraform validate`. Terragrunt config resolves correctly
+  (`terragrunt stack generate` + `terragrunt render`).
+- **AWS side:** validated with a real `plan` against a test account
+  (`Plan: 13 to add` — roles, trust anchor, sync + target profiles).
+- **Teleport integration apply** requires the Teleport provider to reach your
+  cluster's API endpoint (proxy address + a valid identity file).
 
-## Granting access
+## Troubleshooting
 
-Profiles sync in as apps. The module stamps an `access-level` tag on each target
-profile, which Teleport imports as the `aws/access-level` app label; scope on
-that (plus `teleport.dev/account-id`) in a Teleport role, alongside `aws_role_arns`
-listing the target role ARNs (see the `target_role_arns` output). The generated
-`teleport.dev/aws-roles-anywhere-profile-arn` label is also available.
-
-## Notes / verify before applying
-
-- Validated with `tofu validate` (OpenTofu 1.12.2); provider versions resolved
-  and pinned in the `.terraform.lock.hcl` files: Teleport `18.9.0`, AWS `6.51.0`.
-  The `>= 5.0` constraint allowed AWS 6.x — tighten to `~> 5.0` if you need 5.x.
-- The profile-sync IAM policy is a reasonable starting set
-  (`rolesanywhere:ListProfiles/GetProfile/ListTagsForResource`, `iam:GetRole/ListRoles`);
-  tighten or expand against current Teleport docs for your version.
-- `validate`-level confidence only — not `plan`/`apply`'d against a live
-  cluster or real AWS accounts.
+**Provider/cluster versions:** keep the Teleport provider on the same major as your
+cluster (constraint is `>= 18.0`; pin tighter if needed).
