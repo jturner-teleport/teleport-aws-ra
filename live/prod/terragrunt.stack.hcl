@@ -23,6 +23,7 @@ unit "prod-1-us-east-1" {
         name = "Admin"
       }
     }
+    roles_unit_path     = ""
   }
 }
 
@@ -48,6 +49,7 @@ unit "prod-1-us-west-2" {
         name = "Admin"
       }
     }
+    roles_unit_path     = ""
   }
 }
 
@@ -73,5 +75,6 @@ unit "prod-1-eu-west-1" {
         name = "Admin"
       }
     }
+    roles_unit_path     = ""
   }
 }

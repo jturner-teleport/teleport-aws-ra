@@ -211,6 +211,25 @@ alternative commented out. See the comments in `example/*.tf` and
 Either way the RA trust uses `aws:SourceAccount`, so one statement covers every
 region in the account.
 
+**Global roles vs. regional RA (multi-region accounts):** IAM roles are global;
+RA resources (trust anchor, profiles) are regional. So when `create_roles: true`,
+the generator creates the roles in only the account's **first** region and
+**references** that same role from the other regions — those region units take a
+Terragrunt dependency on the creator so the role exists before their RA profiles
+point at it. The dependency is intra-account only, so `run --all` still
+parallelizes across accounts. The single global role is trusted by the trust
+anchor in every region (via `aws:SourceAccount`), so one role serves them all.
+
+> **Alternative — dedicated per-account roles unit.** The default above creates
+> the roles in the account's *first* region, so reordering/removing that region
+> moves the roles (a destroy + recreate). If you expect to change region lists
+> on accounts that *also* create their own roles, an alternative is a dedicated
+> per-account "roles" unit (roles created once, region-agnostic; every regional
+> unit then just references). It decouples role lifecycle from any region at the
+> cost of one extra state per account plus a roles-only module path. Not wired up
+> today — prod references pre-existing roles, so the coupling only affects the few
+> create-roles test accounts. Add it if that lifecycle coupling ever bites.
+
 ## Granting users access
 
 Teleport imports each RA profile's AWS tags as app labels prefixed with `aws/`.

@@ -6,6 +6,12 @@
 # accounts that don't have them yet) or REFERENCED as existing roles (which must
 # already trust Roles Anywhere — see docs/reusing-existing-iam-roles.md).
 # Resolution: account → environment → defaults. Same for `regions` and `roles`.
+#
+# IAM roles are GLOBAL: when create_roles is true the generator creates them in
+# only the account's FIRST region and references that same role from the other
+# regions (which wait on the creator unit). So multi-region accounts never try
+# to create the same role name twice. The regional RA resources (trust anchor,
+# profiles) are still created in every region.
 
 defaults:
   regions: [us-east-1, us-west-2]

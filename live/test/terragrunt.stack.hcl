@@ -26,6 +26,7 @@ unit "test-1-us-east-1" {
         managed_policy_arns = ["arn:aws:iam::aws:policy/AdministratorAccess"]
       }
     }
+    roles_unit_path     = ""
   }
 }
 
@@ -39,21 +40,19 @@ unit "test-1-us-west-2" {
     aws_profile         = "teleport-test-1"
     deployer_role_arn   = ""
     unit_name           = "test-1-us-west-2"
-    create_target_roles = true
+    create_target_roles = false
     target_roles        = {
       readonly  = {
-        name                = "ReadOnly"
-        managed_policy_arns = ["arn:aws:iam::aws:policy/ReadOnlyAccess"]
+        name = "ReadOnly"
       }
       poweruser = {
-        name                = "PowerUser"
-        managed_policy_arns = ["arn:aws:iam::aws:policy/PowerUserAccess"]
+        name = "PowerUser"
       }
       admin     = {
-        name                = "Admin"
-        managed_policy_arns = ["arn:aws:iam::aws:policy/AdministratorAccess"]
+        name = "Admin"
       }
     }
+    roles_unit_path     = "../us-east-1"
   }
 }
 
@@ -82,6 +81,7 @@ unit "test-2-us-east-1" {
         managed_policy_arns = ["arn:aws:iam::aws:policy/AdministratorAccess"]
       }
     }
+    roles_unit_path     = ""
   }
 }
 
@@ -95,20 +95,18 @@ unit "test-2-us-west-2" {
     aws_profile         = "teleport-test-2"
     deployer_role_arn   = ""
     unit_name           = "test-2-us-west-2"
-    create_target_roles = true
+    create_target_roles = false
     target_roles        = {
       readonly  = {
-        name                = "ReadOnly"
-        managed_policy_arns = ["arn:aws:iam::aws:policy/ReadOnlyAccess"]
+        name = "ReadOnly"
       }
       poweruser = {
-        name                = "PowerUser"
-        managed_policy_arns = ["arn:aws:iam::aws:policy/PowerUserAccess"]
+        name = "PowerUser"
       }
       admin     = {
-        name                = "Admin"
-        managed_policy_arns = ["arn:aws:iam::aws:policy/AdministratorAccess"]
+        name = "Admin"
       }
     }
+    roles_unit_path     = "../us-east-1"
   }
 }
