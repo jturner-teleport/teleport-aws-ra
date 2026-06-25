@@ -78,7 +78,18 @@ def main():
             regions = resolve(acct, env, defaults, "regions", [])
             roles = resolve(acct, env, defaults, "roles", {})
             create = bool(resolve(acct, env, defaults, "create_roles", False))
+
+            # IAM roles are GLOBAL, so when an account creates them we do it in
+            # exactly ONE region (the first) and reference that same role from
+            # the others — otherwise both region units would create the same
+            # role name and collide. The referencing regions declare an ordering
+            # dependency on the creator so the role exists before their Roles
+            # Anywhere profiles point at it. (When create=false, every region
+            # references pre-existing roles, so there's no creator/dependency.)
+            creator_region = regions[0] if (create and regions) else None
             for region in regions:
+                is_creator = create and region == creator_region
+                roles_unit_path = f"../{creator_region}" if (create and not is_creator) else ""
                 units.append({
                     "account_name": acct["name"],
                     "region": region,
@@ -91,8 +102,12 @@ def main():
                         "aws_profile":         acct.get("aws_profile", ""),
                         "deployer_role_arn":   acct.get("deployer_role_arn", ""),
                         "unit_name":           f'{acct["name"]}-{region}',
-                        "create_target_roles": create,
-                        "target_roles":        target_roles(roles, create),
+                        # Create the global IAM roles only in the creator region;
+                        # reference them (name-only) everywhere else.
+                        "create_target_roles": is_creator,
+                        "target_roles":        target_roles(roles, is_creator),
+                        # Set on referencing regions → wait for the creator unit.
+                        "roles_unit_path":     roles_unit_path,
                     },
                 })
 

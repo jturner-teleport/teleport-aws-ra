@@ -10,6 +10,15 @@ terraform {
   source = "${get_repo_root()}//modules/ara-region"
 }
 
+# The target IAM roles are global and created once per account (in the first
+# region's unit). When this unit only references those roles, wait for the
+# creator unit so the roles exist before this region's RA profiles point at
+# them. An empty path (the creator unit, or accounts that reference existing
+# roles) imposes no ordering, keeping `run --all` parallel across accounts.
+dependencies {
+  paths = values.roles_unit_path != "" ? [values.roles_unit_path] : []
+}
+
 # AWS provider for this unit's account + region. Two auth modes per account
 # (set in inventory.yaml): aws_profile → use that named profile (static keys via
 # a credentials file); otherwise assume_role into the deployer role. Neither the
