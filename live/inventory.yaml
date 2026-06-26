@@ -46,6 +46,6 @@ environments:
     accounts:
       - name: prod-1
         account_id: "333333333333"
-        deployer_role_arn: "arn:aws:iam::333333333333:role/tec-deployer"
+        deployer_role_arn: "arn:aws:iam::333333333333:role/tec-deployer-role"
         # Per-account override: this one also has an EU region.
         regions: [us-east-1, us-west-2, eu-west-1]

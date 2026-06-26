@@ -54,7 +54,10 @@ reviewable; never edit them by hand.
     gitignored `live/.aws-credentials` and point at it:
     `export AWS_SHARED_CREDENTIALS_FILE="$(pwd)/live/.aws-credentials"`.
   - `deployer_role_arn: <arn>` → base credentials in your shell that can
-    `sts:AssumeRole` into that role (the `tec-deployer` model).
+    `sts:AssumeRole` into that role (the `tec-deployer-role` model). The base
+    identity in your shell must be one the deployer role's trust policy allows —
+    if the assume fails with `AccessDenied`, check both the role name and that
+    the credentials running terragrunt match a trusted principal.
 - For accounts in **reference** mode (`create_roles: false`), the access roles
   must already exist and trust Roles Anywhere — see
   [../docs/reusing-existing-iam-roles.md](../docs/reusing-existing-iam-roles.md).

@@ -9,7 +9,7 @@ unit "prod-1-us-east-1" {
     account_id          = "333333333333"
     region              = "us-east-1"
     aws_profile         = ""
-    deployer_role_arn   = "arn:aws:iam::333333333333:role/tec-deployer"
+    deployer_role_arn   = "arn:aws:iam::333333333333:role/tec-deployer-role"
     unit_name           = "prod-1-us-east-1"
     create_target_roles = false
     target_roles        = {
@@ -35,7 +35,7 @@ unit "prod-1-us-west-2" {
     account_id          = "333333333333"
     region              = "us-west-2"
     aws_profile         = ""
-    deployer_role_arn   = "arn:aws:iam::333333333333:role/tec-deployer"
+    deployer_role_arn   = "arn:aws:iam::333333333333:role/tec-deployer-role"
     unit_name           = "prod-1-us-west-2"
     create_target_roles = false
     target_roles        = {
@@ -61,7 +61,7 @@ unit "prod-1-eu-west-1" {
     account_id          = "333333333333"
     region              = "eu-west-1"
     aws_profile         = ""
-    deployer_role_arn   = "arn:aws:iam::333333333333:role/tec-deployer"
+    deployer_role_arn   = "arn:aws:iam::333333333333:role/tec-deployer-role"
     unit_name           = "prod-1-eu-west-1"
     create_target_roles = false
     target_roles        = {

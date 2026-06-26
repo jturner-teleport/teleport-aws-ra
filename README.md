@@ -131,7 +131,7 @@ environments:
   prod:
     accounts:
       - { name: prod1, account_id: "222222222222",
-          deployer_role_arn: "arn:aws:iam::222222222222:role/tec-deployer",          # assume-role
+          deployer_role_arn: "arn:aws:iam::222222222222:role/tec-deployer-role",     # assume-role
           regions: [us-east-1, us-west-2, eu-west-1] }                                # per-account override
 ```
 
