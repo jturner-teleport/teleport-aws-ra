@@ -174,6 +174,37 @@ By default each role uses a **wildcard** `aws_role_arns` (`arn:aws:iam::*:role/R
 so one role grants that tier across every account (relies on consistent role
 names). Set `account_ids` in that unit to pin to specific accounts instead.
 
+### Step 6 — map SSO (Okta) groups to tiers (direct vs. request)
+
+Each tier in `inventory.defaults.roles` can set two fields that control **who**
+gets it and **how**:
+
+```yaml
+roles:
+  readonly:  { name: ReadOnly,  okta_group: eg-aws-readonly,  access: direct }   # auto-granted
+  poweruser: { name: PowerUser, okta_group: eg-aws-poweruser, access: request }  # requestable
+  admin:     { name: Admin,     okta_group: eg-aws-admin,     access: request }
+```
+
+- `access: direct` → members of `okta_group` get the role automatically on login.
+- `access: request` → members can **request** it (JIT); the module makes a
+  `aws-request-<tier>` role for that.
+
+Apply, then take the generated mapping and merge it into your SAML connector — the
+connector is **not** managed by Terraform (it's auth-critical), so you paste the
+output in by hand:
+
+```sh
+cd live/teleport/access-roles
+terragrunt output -json attributes_to_roles     # Okta group -> Teleport role
+tctl get saml/okta > okta.yaml                   # paste under spec.attributes_to_roles
+tctl create -f okta.yaml
+```
+
+Result: readonly-group members get read-only automatically; power/admin-group
+members see those tiers as requestable and get them on approval. See
+[modules/teleport-access-roles/README.md](modules/teleport-access-roles/README.md).
+
 ### Adding accounts later
 
 Edit `inventory.yaml` → `python3 live/scripts/generate-stacks.py` → commit →

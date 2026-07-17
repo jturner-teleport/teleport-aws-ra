@@ -16,16 +16,28 @@
 defaults:
   regions: [us-east-1, us-west-2]
   create_roles: false # default: reference existing roles
-  roles: # access_level => IAM role name + (for creation) managed policies
+  # access_level => IAM role name + (for creation) managed policies.
+  # okta_group / access are consumed by the teleport/access-roles unit (not by the
+  # AWS stacks): okta_group is the SAML "groups" value that maps to this tier, and
+  # access is "direct" (auto-granted on login) or "request" (must be access-requested).
+  # The mapping to paste into the Okta SAML connector is the module's
+  # `attributes_to_roles` output — the connector itself is not managed here.
+  roles:
     readonly:
       name: ReadOnly
       managed_policy_arns: ["arn:aws:iam::aws:policy/ReadOnlyAccess"]
+      okta_group: eg-aws-readonly # replace with your real Okta group
+      access: direct              # auto-granted to members of okta_group
     poweruser:
       name: PowerUser
       managed_policy_arns: ["arn:aws:iam::aws:policy/PowerUserAccess"]
+      okta_group: eg-aws-poweruser
+      access: request             # members of okta_group may REQUEST this tier
     admin:
       name: Admin
       managed_policy_arns: ["arn:aws:iam::aws:policy/AdministratorAccess"]
+      okta_group: eg-aws-admin
+      access: request
 
 environments:
   test:

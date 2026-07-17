@@ -17,9 +17,16 @@ locals {
 }
 
 inputs = {
-  # tier => { aws_role_name } from the inventory's role definitions
+  # tier => { aws_role_name, okta_group, access } from the inventory's role defs.
+  # okta_group / access drive the Okta group -> role mapping (see the module's
+  # attributes_to_roles output) and whether a tier is auto-granted ("direct") or
+  # requestable ("request").
   access_roles = {
-    for tier, spec in local.roles : tier => { aws_role_name = spec.name }
+    for tier, spec in local.roles : tier => {
+      aws_role_name = spec.name
+      okta_group    = try(spec.okta_group, "")
+      access        = try(spec.access, "direct")
+    }
   }
 
   # Default: wildcard ARNs across all accounts (scales to many accounts). To pin
