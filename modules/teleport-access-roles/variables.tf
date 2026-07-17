@@ -20,7 +20,13 @@ variable "access_roles" {
     aws_role_name      = string           # IAM role name → aws_role_arns
     access_level_label = optional(string) # aws/access-level value to match; defaults to the map key
     description        = optional(string)
+    okta_group         = optional(string, "")        # SAML "groups" value that maps to this tier (blank = no mapping emitted)
+    access             = optional(string, "direct")  # "direct" = auto-granted, or "request" = must be access-requested
   }))
+  validation {
+    condition     = alltrue([for r in var.access_roles : contains(["direct", "request"], r.access)])
+    error_message = "access must be either \"direct\" or \"request\"."
+  }
 }
 
 variable "account_ids" {

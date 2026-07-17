@@ -17,6 +17,23 @@ terraform {
 
 locals {
   account_scope = length(var.account_ids) > 0 ? var.account_ids : ["*"]
+
+  # Tiers that are access-requested rather than auto-granted → get a requester role.
+  request_tiers = { for tier, r in var.access_roles : tier => r if r.access == "request" }
+
+  # SAML connector attributes_to_roles: each tier's Okta group maps to the role a
+  # matching user should receive — the direct access role for "direct" tiers, or
+  # the requester role for "request" tiers. Only tiers with an okta_group set are
+  # emitted. This is an OUTPUT to merge into your teleport_saml_connector; the
+  # connector itself is intentionally not managed here (it's auth-critical).
+  attributes_to_roles = [
+    for tier, r in var.access_roles : {
+      name  = "groups"
+      value = r.okta_group
+      roles = [r.access == "request" ? "${var.role_name_prefix}-request-${tier}" : "${var.role_name_prefix}-${tier}"]
+    }
+    if r.okta_group != ""
+  ]
 }
 
 resource "teleport_role" "access" {
@@ -38,6 +55,29 @@ resource "teleport_role" "access" {
         for account_id in local.account_scope :
         "arn:aws:iam::${account_id}:role/${each.value.aws_role_name}"
       ]
+    }
+  }
+}
+
+# Requester role per "request" tier: grants no access itself, only the ability to
+# request the matching direct access role above. Users mapped here (via their Okta
+# group) get just-in-time access on approval instead of a standing grant.
+resource "teleport_role" "request" {
+  for_each = local.request_tiers
+  version  = var.role_version
+
+  metadata = {
+    name        = "${var.role_name_prefix}-request-${each.key}"
+    description = "Request ${var.role_name_prefix}-${each.key} (AWS ${each.value.aws_role_name}) via access request"
+    labels      = var.labels
+  }
+
+  spec = {
+    allow = {
+      request = {
+        # Reference the direct role by resource so it's created first.
+        roles = [teleport_role.access[each.key].metadata.name]
+      }
     }
   }
 }
