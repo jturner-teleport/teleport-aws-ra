@@ -79,12 +79,24 @@ terragrunt run --all apply
 # 4. Apply the cluster-global Teleport access roles once (one per tier)
 cd live/teleport/access-roles
 terragrunt apply
+
+# 5. Merge the Okta group -> role mapping into your SAML connector (by hand)
+terragrunt output -json attributes_to_roles
+tctl get saml/okta > okta.yaml     # paste under spec.attributes_to_roles
+tctl create -f okta.yaml
 ```
 
 The access roles are cluster-wide (not per account/region), so they live outside
 the env stacks and are applied once. They read the tiers from `inventory.yaml` and
 default to wildcard `aws_role_arns` covering all accounts; set `account_ids` in
 that unit to pin them for the proof.
+
+Each tier's `okta_group` / `access` fields (in `inventory.defaults.roles`) drive
+SSO access: `access: direct` auto-grants the role to members of that Okta group;
+`access: request` creates a `aws-request-<tier>` role so members can request it
+just-in-time. The `attributes_to_roles` output is the Okta-group→role mapping to
+paste into the connector — the connector itself is **not** Terraform-managed
+(auth-critical). See `../modules/teleport-access-roles/README.md`.
 
 To add accounts at scale, you only edit `inventory.yaml` and re-run the
 generator — the unit template and modules don't change.
